@@ -1,5 +1,6 @@
 import {
   BadGatewayException,
+  GatewayTimeoutException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -16,7 +17,12 @@ import {
 } from './soroban-rpc.methods';
 import type { SorobanRpcNetwork } from './dto/execute-soroban-rpc.dto';
 
-/** Upstream budget for a single JSON-RPC call; the console shows it as `tookMs`. */
+/**
+ * Upstream budget for a single JSON-RPC call, enforced via `AbortSignal.timeout`
+ * for both the request and the body read. Timeouts map to
+ * `GatewayTimeoutException`; other network failures map to `BadGatewayException`.
+ * The console shows the elapsed time as `tookMs`.
+ */
 const RPC_TIMEOUT_MS = 15_000;
 
 /**
@@ -162,6 +168,11 @@ export class SorobanRpcService {
         signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
       });
     } catch (error: unknown) {
+      if (isTimeoutError(error)) {
+        throw new GatewayTimeoutException(
+          `Soroban RPC endpoint did not respond within ${RPC_TIMEOUT_MS} ms`,
+        );
+      }
       const reason = error instanceof Error ? error.message : String(error);
       throw new BadGatewayException(
         `Could not reach the Soroban RPC endpoint: ${reason}`,
@@ -175,9 +186,17 @@ export class SorobanRpcService {
       );
     }
 
-    const payload = (await response.json().catch(() => null)) as
-      | JsonRpcPayload
-      | null;
+    let payload: JsonRpcPayload | null;
+    try {
+      payload = (await response.json()) as JsonRpcPayload | null;
+    } catch (error: unknown) {
+      if (isTimeoutError(error)) {
+        throw new GatewayTimeoutException(
+          `Soroban RPC endpoint did not respond within ${RPC_TIMEOUT_MS} ms`,
+        );
+      }
+      payload = null;
+    }
     if (!payload || typeof payload !== 'object') {
       throw new BadGatewayException('Soroban RPC returned a non-JSON response');
     }
@@ -204,4 +223,12 @@ export class SorobanRpcService {
       result: payload.result ?? null,
     };
   }
+}
+
+/** True when an error was raised by an `AbortSignal.timeout` firing. */
+function isTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === 'TimeoutError' || error.name === 'AbortError')
+  );
 }

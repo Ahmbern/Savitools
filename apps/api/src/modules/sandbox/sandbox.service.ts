@@ -172,7 +172,23 @@ export class SandboxService {
 
   async sendPayment(dto: PaymentDto & { network?: string }) {
     const network = dto.network || 'testnet';
-    const result = await this.stellar.submitPayment({
+    const submitPayment = (this.stellar as unknown as {
+      submitPayment: (
+        params: {
+          sourceSecret: string;
+          destination: string;
+          asset: string;
+          amount: string;
+          memo?: string;
+        },
+        network: string,
+      ) => Promise<{
+        hash: string;
+        fee_charged: string;
+        result_codes?: { operation_results?: string[] };
+      }>;
+    }).submitPayment;
+    const result = await submitPayment.call(this.stellar, {
       sourceSecret: dto.fromSecret,
       destination: dto.toPublicKey,
       asset: dto.asset,
@@ -181,7 +197,7 @@ export class SandboxService {
     }, network);
 
     // Decoded after the submission so the validation order (and therefore the
-    // error a caller sees for a bad destination) stays inside submitPayment.
+    // error a caller sees for a bad destination) stays inside submission.
     const parsed = this.stellar.assertDestination(dto.toPublicKey);
 
     return {
